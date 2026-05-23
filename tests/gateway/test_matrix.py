@@ -1949,7 +1949,7 @@ class TestMatrixReadReceipts:
 # Media normalization
 # ---------------------------------------------------------------------------
 
-class TestMatrixImageOnlyMediaNormalization:
+class TestMatrixMediaNormalization:
     def setup_method(self):
         self.adapter = _make_adapter()
         self.adapter._client = MagicMock()
@@ -2020,6 +2020,42 @@ class TestMatrixImageOnlyMediaNormalization:
 
         assert captured_event is not None
         assert captured_event.text == "Please describe this chart"
+
+    @pytest.mark.asyncio
+    async def test_video_upload_is_cached_as_video_media(self):
+        captured_event = None
+
+        async def capture(msg_event):
+            nonlocal captured_event
+            captured_event = msg_event
+
+        self.adapter._client.download_media = AsyncMock(return_value=b"fake video data")
+        self.adapter.handle_message = capture
+
+        await self.adapter._handle_media_message(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            event_id="$video1",
+            event_ts=0.0,
+            source_content={
+                "msgtype": "m.video",
+                "body": "clip.webm",
+                "url": "mxc://example/clip.webm",
+                "info": {"mimetype": "video/webm"},
+            },
+            relates_to={},
+            msgtype="m.video",
+        )
+
+        assert captured_event is not None
+        assert captured_event.text == "clip.webm"
+        assert captured_event.message_type == MessageType.VIDEO
+        assert captured_event.media_types == ["video/webm"]
+        assert captured_event.media_urls
+        assert not captured_event.media_urls[0].startswith("http")
+        assert "/cache/videos/" in captured_event.media_urls[0]
+        assert captured_event.media_urls[0].endswith(".webm")
+
 # ---------------------------------------------------------------------------
 # Message redaction
 # ---------------------------------------------------------------------------

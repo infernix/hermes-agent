@@ -946,6 +946,8 @@ def _build_media_placeholder(event) -> str:
             parts.append(f"[User sent an image: {url}]")
         elif mtype.startswith("audio/"):
             parts.append(f"[User sent audio: {url}]")
+        elif mtype.startswith("video/") or getattr(event, "message_type", None) == MessageType.VIDEO:
+            parts.append(f"[User sent a video: {url}]")
         else:
             parts.append(f"[User sent a file: {url}]")
     return "\n".join(parts)
@@ -2890,16 +2892,18 @@ class GatewayRunner:
 
         running_agent = self._running_agents.get(session_key)
 
-        # Steer mode: inject mid-run via running_agent.steer() instead of
-        # queueing + interrupting.  If the agent isn't running yet
-        # (sentinel) or lacks steer(), or the payload is empty, fall back
-        # to queue semantics so nothing is lost.
+        # Steer mode: inject text-only follow-ups mid-run via running_agent.steer()
+        # instead of queueing + interrupting.  If the event carries media, the
+        # agent must receive the full MessageEvent on the next turn so cached file
+        # paths and MIME types survive; steer only has a text channel.
         effective_mode = self._busy_input_mode
         steered = False
         if effective_mode == "steer":
             steer_text = (event.text or "").strip()
+            event_has_media = bool(getattr(event, "media_urls", None))
             can_steer = (
                 steer_text
+                and not event_has_media
                 and running_agent is not None
                 and running_agent is not _AGENT_PENDING_SENTINEL
                 and hasattr(running_agent, "steer")
@@ -7588,10 +7592,10 @@ class GatewayRunner:
         if getattr(event, "channel_context", None):
             message_text = f"{event.channel_context}\n\n[New message]\n{message_text}"
 
-        # Declare at outer scope so the audio-file-paths handling block below
-        # remains safe when ``event.media_urls`` is empty (no inner block runs).
+        # Declare at outer scope so the audio/video file-path handling blocks below
+        # remain safe when ``event.media_urls`` is empty (no inner block runs).
         audio_file_paths: list[str] = []
-
+        video_file_paths: list[str] = []
         if event.media_urls:
             image_paths = []
             audio_paths = []
@@ -7599,6 +7603,8 @@ class GatewayRunner:
                 mtype = event.media_types[i] if i < len(event.media_types) else ""
                 if mtype.startswith("image/") or event.message_type == MessageType.PHOTO:
                     image_paths.append(path)
+                if mtype.startswith("video/") or event.message_type == MessageType.VIDEO:
+                    video_file_paths.append(path)
                 # MessageType.AUDIO = audio file attachment (e.g. .mp3, .m4a) — never STT
                 # MessageType.VOICE = voice message (Opus/OGG) — always STT
                 if event.message_type == MessageType.AUDIO:
@@ -7608,7 +7614,6 @@ class GatewayRunner:
                     and event.message_type not in {MessageType.AUDIO, MessageType.DOCUMENT}
                 ):
                     audio_paths.append(path)
-
             if image_paths:
                 # Decide routing: native (attach pixels) vs text (vision_analyze
                 # pre-run + prepend description).  See agent/image_routing.py.
@@ -7680,6 +7685,21 @@ class GatewayRunner:
                     f"[The user sent an audio file attachment: '{_display}'. "
                     f"It is saved at: {_agent_path}. "
                     f"Ask the user what they'd like you to do with it, or pass the path to a transcription or media tool.]"
+                )
+                message_text = f"{_note}\n\n{message_text}"
+
+        if video_file_paths:
+            from tools.credential_files import to_agent_visible_cache_path as _to_agent_path
+            for _vpath in video_file_paths:
+                _basename = os.path.basename(_vpath)
+                _parts = _basename.split("_", 2)
+                _display = _parts[2] if len(_parts) >= 3 else _basename
+                _display = re.sub(r'[^\w.\- ]', '_', _display)
+                _agent_path = _to_agent_path(_vpath)
+                _note = (
+                    f"[The user sent a video file attachment: '{_display}'. "
+                    f"It is saved at: {_agent_path}. "
+                    f"Use video_analyze with this path if visual analysis is needed.]"
                 )
                 message_text = f"{_note}\n\n{message_text}"
 

@@ -1940,9 +1940,11 @@ class MatrixAdapter(BasePlatformAdapter):
 
                     if file_bytes is not None:
                         from gateway.platforms.base import (
+                            SUPPORTED_VIDEO_TYPES,
                             cache_audio_from_bytes,
                             cache_document_from_bytes,
                             cache_image_from_bytes,
+                            cache_video_from_bytes,
                         )
 
                         if msg_type == MessageType.PHOTO:
@@ -1966,14 +1968,21 @@ class MatrixAdapter(BasePlatformAdapter):
                                 or ".ogg"
                             )
                             cached_path = cache_audio_from_bytes(file_bytes, ext=ext)
+                        elif msg_type == MessageType.VIDEO:
+                            ext = Path(body or "").suffix.lower()
+                            if not ext:
+                                ext = next(
+                                    (
+                                        suffix
+                                        for suffix, mimetype in SUPPORTED_VIDEO_TYPES.items()
+                                        if mimetype == media_type
+                                    ),
+                                    ".mp4",
+                                )
+                            cached_path = cache_video_from_bytes(file_bytes, ext=ext)
                         else:
-                            filename = body or (
-                                "video.mp4"
-                                if msg_type == MessageType.VIDEO
-                                else "document"
-                            )
                             cached_path = cache_document_from_bytes(
-                                file_bytes, filename
+                                file_bytes, body or "document"
                             )
             except Exception as e:
                 logger.warning("[Matrix] Failed to cache media: %s", e)

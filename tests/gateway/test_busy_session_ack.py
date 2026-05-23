@@ -219,6 +219,37 @@ class TestBusySessionAck:
         assert "Interrupting" not in content
 
     @pytest.mark.asyncio
+    async def test_steer_mode_queues_media_events_instead_of_text_only_steer(self):
+        """Media events must keep attachments; steer only preserves text."""
+        runner, sentinel = _make_runner()
+        runner._busy_input_mode = "steer"
+        adapter = _make_adapter()
+
+        event = _make_event(text="clip.webm")
+        event.message_type = MessageType.VIDEO
+        event.media_urls = ["/tmp/hermes/cache/videos/video_abc.webm"]
+        event.media_types = ["video/webm"]
+        sk = build_session_key(event.source)
+        runner.adapters[event.source.platform] = adapter
+
+        agent = MagicMock()
+        agent.steer = MagicMock(return_value=True)
+        runner._running_agents[sk] = agent
+
+        with patch("gateway.run.merge_pending_message_event") as mock_merge:
+            await runner._handle_active_session_busy_message(event, sk)
+
+        agent.steer.assert_not_called()
+        agent.interrupt.assert_not_called()
+        mock_merge.assert_called_once()
+        assert mock_merge.call_args.args[2] is event
+
+        call_kwargs = adapter._send_with_retry.call_args
+        content = call_kwargs.kwargs.get("content") or call_kwargs[1].get("content", "")
+        assert "Queued for the next turn" in content
+        assert "Steered" not in content
+
+    @pytest.mark.asyncio
     async def test_steer_mode_falls_back_to_queue_when_agent_rejects(self):
         """If agent.steer() returns False, fall back to queue behavior."""
         runner, sentinel = _make_runner()
